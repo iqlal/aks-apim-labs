@@ -1,7 +1,9 @@
-import json
-
+from flask import Flask, request, jsonify, render_template_string
 import requests
-from flask import Flask, jsonify, render_template_string, request
+import json
+import socket
+import ipaddress
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -50,7 +52,6 @@ HTML_TEMPLATE = """
       <!-- Left Column: Config & Request -->
       <section class="lg:col-span-6 space-y-6">
 
-        <!-- Target Config Box -->
         <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm space-y-4">
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold tracking-tight text-zinc-900">Gateway Target</h3>
@@ -61,17 +62,16 @@ HTML_TEMPLATE = """
             <label class="text-xs font-medium text-zinc-600">Target Endpoint URL</label>
             <input type="text" id="endpoint"
               class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-2 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 transition placeholder:text-zinc-400"
-              value="https://pama-apim.azure-api.net/api2/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-03-01-preview" />
+              value="https://apim-pama-poc.azure-api.net/pama/openai/v1/chat/completions" />
           </div>
 
           <div class="space-y-1.5">
-            <label class="text-xs font-medium text-zinc-600">Subscription Key <span class="text-zinc-400 font-normal">(Auto-injected ke query/header)</span></label>
-            <input type="password" id="subscriptionKey" placeholder="f6d9a969c6464a2f8add..."
+            <label class="text-xs font-medium text-zinc-600">Subscription Key</label>
+            <input type="password" id="subscriptionKey" placeholder="Paste subscription key..."
               class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-2 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 transition placeholder:text-zinc-400" />
           </div>
         </div>
 
-        <!-- Payload Editor Box -->
         <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm space-y-4">
           <div class="flex items-center justify-between border-b border-zinc-100 pb-3">
             <div class="flex space-x-2">
@@ -83,24 +83,23 @@ HTML_TEMPLATE = """
             <span class="text-[11px] text-zinc-500 font-mono">application/json</span>
           </div>
 
-          <!-- Tab 1: Visual Form -->
           <div id="builderView" class="space-y-4">
             <div class="grid grid-cols-2 gap-3">
               <div class="space-y-1.5">
                 <label class="text-xs font-medium text-zinc-600">Model Deployment</label>
-                <input type="text" id="modelInput" value="gpt-5.4-mini"
+                <input type="text" id="modelInput" value="gpt-4o"
                   class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-1.5 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950" />
               </div>
               <div class="space-y-1.5">
                 <label class="text-xs font-medium text-zinc-600">Max Tokens</label>
-                <input type="number" id="tokensInput" value="5000"
+                <input type="number" id="tokensInput" value="50"
                   class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-1.5 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950" />
               </div>
             </div>
 
             <div class="space-y-1.5">
               <label class="text-xs font-medium text-zinc-600">System Instruction</label>
-              <input type="text" id="systemPrompt" value="You are an advanced AI assistant. Provide a detailed, highly structured, and comprehensive response."
+              <input type="text" id="systemPrompt" value="You are a helpful assistant"
                 class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950" />
             </div>
 
@@ -108,17 +107,15 @@ HTML_TEMPLATE = """
               <label class="text-xs font-medium text-zinc-600">User Prompt</label>
               <textarea id="userPrompt" rows="4"
                 class="w-full bg-zinc-50/50 border border-zinc-200 rounded-md px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 resize-none font-sans"
-                placeholder="Type your prompt here...">create golang code for basic djikstra simulation</textarea>
+                placeholder="Type your prompt here...">How are you?</textarea>
             </div>
           </div>
 
-          <!-- Tab 2: Raw JSON -->
           <div id="jsonView" class="space-y-2 hidden">
             <textarea id="rawJsonArea" rows="12"
               class="w-full bg-zinc-50 border border-zinc-200 rounded-md p-3 text-xs font-mono text-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-950 leading-relaxed resize-y"></textarea>
           </div>
 
-          <!-- Action Button -->
           <button onclick="dispatchRequest()" id="btnSend"
             class="w-full inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors bg-zinc-950 text-white hover:bg-zinc-800 h-9 px-4 py-2 font-semibold shadow-sm">
             Send Request (Ctrl + Enter)
@@ -129,11 +126,13 @@ HTML_TEMPLATE = """
       <!-- Right Column: Response Inspector -->
       <section class="lg:col-span-6 space-y-6">
         <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm space-y-4 flex flex-col h-full min-h-[500px]">
-
-          <div class="flex items-center justify-between border-b border-zinc-100 pb-3">
-            <div class="flex items-center space-x-3">
+          
+          <div class="flex flex-wrap items-center justify-between border-b border-zinc-100 pb-3 gap-2">
+            <div class="flex flex-wrap items-center gap-2">
               <h3 class="text-sm font-semibold tracking-tight text-zinc-900">Inspector</h3>
               <div id="statusBadge" class="hidden text-[11px] font-mono px-2 py-0.5 rounded-full border"></div>
+              <div id="routeBadge" class="hidden text-[11px] font-mono px-2 py-0.5 rounded-full border"></div>
+              <span id="dnsBadge" class="hidden text-[11px] font-mono text-zinc-700 bg-zinc-100 border border-zinc-200 px-2 py-0.5 rounded"></span>
               <span id="latencyBadge" class="hidden text-[11px] font-mono text-zinc-500 font-medium"></span>
             </div>
             <button onclick="copyResponse()" id="btnCopy"
@@ -142,7 +141,6 @@ HTML_TEMPLATE = """
             </button>
           </div>
 
-          <!-- Response Container -->
           <div class="relative flex-1 bg-zinc-50 border border-zinc-200 rounded-md overflow-hidden">
             <pre id="responseBox" class="p-4 text-xs font-mono text-zinc-800 overflow-auto h-[480px] leading-relaxed select-all">// Responses from APIM will stream here...</pre>
           </div>
@@ -178,12 +176,12 @@ HTML_TEMPLATE = """
 
     function constructPayloadFromForm() {
       return {
-        model: document.getElementById('modelInput').value.trim() || 'gpt-5.4-mini',
+        model: document.getElementById('modelInput').value.trim() || 'gpt-4o',
         messages: [
           { role: "system", content: document.getElementById('systemPrompt').value },
           { role: "user", content: document.getElementById('userPrompt').value }
         ],
-        max_completion_tokens: parseInt(document.getElementById('tokensInput').value) || 5000
+        max_tokens: parseInt(document.getElementById('tokensInput').value) || 50
       };
     }
 
@@ -191,8 +189,10 @@ HTML_TEMPLATE = """
       const btn = document.getElementById('btnSend');
       const resBox = document.getElementById('responseBox');
       const statusBadge = document.getElementById('statusBadge');
+      const routeBadge = document.getElementById('routeBadge');
+      const dnsBadge = document.getElementById('dnsBadge');
       const latencyBadge = document.getElementById('latencyBadge');
-
+      
       const endpoint = document.getElementById('endpoint').value.trim();
       const subscriptionKey = document.getElementById('subscriptionKey').value.trim();
 
@@ -215,8 +215,10 @@ HTML_TEMPLATE = """
 
       btn.disabled = true;
       btn.innerText = "Dispatching...";
-      resBox.innerText = "Waiting for response from APIM gateway...";
+      resBox.innerText = "Resolving DNS & waiting for response from APIM gateway...";
       statusBadge.className = "hidden";
+      routeBadge.className = "hidden";
+      dnsBadge.className = "hidden";
       latencyBadge.className = "hidden";
 
       const startTime = performance.now();
@@ -235,16 +237,32 @@ HTML_TEMPLATE = """
         const elapsed = Math.round(performance.now() - startTime);
         const data = await res.json();
 
-        // Status Code Badge
+        // 1. Status Code Badge
         statusBadge.innerText = `${res.status} ${res.statusText || (res.status === 200 ? 'OK' : 'ERR')}`;
         statusBadge.classList.remove('hidden');
         if (res.status >= 200 && res.status < 300) {
-          statusBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700";
+          statusBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 font-medium";
         } else {
-          statusBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-rose-300 bg-rose-50 text-rose-700";
+          statusBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-rose-300 bg-rose-50 text-rose-700 font-medium";
         }
 
-        // Latency Badge
+        // 2. DNS & Route Inspection Badge
+        if (data._network_meta) {
+          const meta = data._network_meta;
+          dnsBadge.innerText = `IP: ${meta.resolved_ip}`;
+          dnsBadge.classList.remove('hidden');
+
+          routeBadge.classList.remove('hidden');
+          if (meta.is_private) {
+            routeBadge.innerText = "Private (VNET)";
+            routeBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-blue-300 bg-blue-50 text-blue-700 font-semibold";
+          } else {
+            routeBadge.innerText = "Public (Internet)";
+            routeBadge.className = "text-[11px] font-mono px-2 py-0.5 rounded-full border border-amber-300 bg-amber-50 text-amber-800 font-semibold";
+          }
+        }
+
+        // 3. Latency Badge
         latencyBadge.innerText = `${elapsed}ms`;
         latencyBadge.classList.remove('hidden');
 
@@ -268,7 +286,6 @@ HTML_TEMPLATE = """
       setTimeout(() => btn.innerText = "Copy JSON", 1500);
     }
 
-    // Keyboard shortcut: Ctrl + Enter / Cmd + Enter
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         dispatchRequest();
@@ -294,6 +311,21 @@ def proxy():
     sub_key = req_data.get("subscriptionKey", "").strip()
     payload = req_data.get("payload", {})
 
+    parsed_url = urlparse(target_url)
+    hostname = parsed_url.hostname
+
+    # DNS Resolution Inspection
+    resolved_ip = "Unknown"
+    is_private = False
+    try:
+        if hostname:
+            resolved_ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            is_private = ip_obj.is_private
+    except Exception as dns_err:
+        resolved_ip = f"DNS Error: {str(dns_err)}"
+
+    # Auto-inject query param jika belum ada
     if sub_key and "subscription-key=" not in target_url:
         separator = "&" if "?" in target_url else "?"
         target_url = f"{target_url}{separator}subscription-key={sub_key}"
@@ -309,12 +341,31 @@ def proxy():
             headers=headers,
             timeout=90
         )
+        
         try:
-            return jsonify(resp.json()), resp.status_code
+            resp_body = resp.json()
         except ValueError:
-            return jsonify({"raw_response": resp.text}), resp.status_code
+            resp_body = {"raw_response": resp.text}
+
+        # Inject network metadata ke response JSON
+        if isinstance(resp_body, dict):
+            resp_body["_network_meta"] = {
+                "resolved_ip": resolved_ip,
+                "is_private": is_private,
+                "hostname": hostname
+            }
+
+        return jsonify(resp_body), resp.status_code
+
     except Exception as e:
-        return jsonify({"proxy_error": str(e)}), 502
+        return jsonify({
+            "proxy_error": str(e),
+            "_network_meta": {
+                "resolved_ip": resolved_ip,
+                "is_private": is_private,
+                "hostname": hostname
+            }
+        }), 502
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
