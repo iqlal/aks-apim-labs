@@ -41,7 +41,7 @@ metadata:
   name: poc-pama-ai-svc
   namespace: default
 spec:
-  type: LoadBalancer # <-- tetap LoadBalancer biasa biar dapet Public IP otomatis
+  type: LoadBalancer
   selector:
     app: poc-pama-ai
   ports:
