@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: poc-pama-ai
+  namespace: default
+  labels:
+    app: poc-pama-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: poc-pama-ai
+  template:
+    metadata:
+      labels:
+        app: poc-pama-ai
+    spec:
+      containers:
+        - name: web
+          image: quay.io/agit/poc-pama-ai:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: poc-pama-ai-svc
+  namespace: default
+spec:
+  type: LoadBalancer # <-- tetap LoadBalancer biasa biar dapet Public IP otomatis
+  selector:
+    app: poc-pama-ai
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
